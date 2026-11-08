@@ -1,0 +1,6 @@
+import {createServerClient} from '@supabase/ssr';
+import {cookies} from 'next/headers';
+import {serverDb} from './db';
+export async function getAdmin(){const jar=await cookies();const client=createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,{cookies:{getAll(){return jar.getAll()},setAll(values){try{values.forEach(v=>jar.set(v.name,v.value,v.options))}catch{}}}});const {data:{user}}=await client.auth.getUser();if(!user)return null;const {data}=await serverDb().from('admins').select('user_id').eq('user_id',user.id).maybeSingle();return data?user:null}
+export async function login(email:string,password:string){const jar=await cookies();const client=createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,{cookies:{getAll(){return jar.getAll()},setAll(values){values.forEach(v=>jar.set(v.name,v.value,v.options))}}});return client.auth.signInWithPassword({email,password})}
+export async function logout(){const jar=await cookies();const client=createServerClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,{cookies:{getAll(){return jar.getAll()},setAll(values){values.forEach(v=>jar.set(v.name,v.value,v.options))}}});await client.auth.signOut()}
