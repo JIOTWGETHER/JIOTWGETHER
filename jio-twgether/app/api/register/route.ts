@@ -2,19 +2,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createHmac } from 'node:crypto';
 import { serverDb } from '../../../lib/db';
+import { sendRegistrationConfirmation } from '../../../lib/mail';
 
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
-    // 僅在 Vercel 部署環境接受 Vercel 提供的 IP 標頭
     const ip = process.env.VERCEL === '1'
       ? req.headers.get('x-vercel-forwarded-for')
       : null;
 
     const secret = process.env.RATE_LIMIT_SECRET;
 
-    // 無法安全識別 IP 時，不允許報名
     if (!ip || !secret || secret.length < 32) {
       return NextResponse.json(
         { message: '報名服務暫時無法使用，請稍後再試' },
@@ -22,14 +21,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 使用 HMAC 避免直接儲存原始 IP
     const ipHash = createHmac('sha256', secret)
       .update(ip)
       .digest('hex');
 
     const db = serverDb();
 
-    // 檢查 10 分鐘內的請求次數
     const { data: allowed, error: rateError } = await db.rpc(
       'check_registration_rate_limit',
       { p_ip_hash: ipHash }
@@ -51,7 +48,6 @@ export async function POST(req: NextRequest) {
 
     const b = await req.json();
 
-    // 隱藏欄位：降低簡單機器人提交
     if (b.website) {
       return NextResponse.json(
         { message: '已收到' },
@@ -105,11 +101,58 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 報名成功後，讀取活動資訊
+    const { data: event, error: eventError } = await db
+      .from('events')
+      .select('title, starts_at, location')
+      .eq('id', eventId)
+      .single();
+
+    let emailSent = false;
+
+    if (!eventError && event) {
+      try {
+        const eventDate = new Date(
+          event.starts_at
+        ).toLocaleString('zh-TW', {
+          timeZone: 'America/New_York',
+          dateStyle: 'full',
+          timeStyle: 'short'
+        });
+
+        await sendRegistrationConfirmation({
+          name,
+          email,
+          eventTitle: event.title,
+          eventDate,
+          eventLocation: event.location
+        });
+
+        emailSent = true;
+      } catch (mailError) {
+        console.error(
+          'Registration confirmation email failed:',
+          mailError
+        );
+      }
+    } else {
+      console.error(
+        'Failed to retrieve event for confirmation email:',
+        eventError
+      );
+    }
+
+    // 寄信失敗不會取消已成功的報名
     return NextResponse.json({
-      message: '報名成功！請保留活動資訊；主辦方會透過 Email 聯絡你。'
+      message: emailSent
+        ? '報名成功！確認信已寄出，請查看你的 Email。'
+        : '報名成功！但確認信暫時無法寄出，請保留活動資訊。',
+      emailSent
     });
 
-  } catch {
+  } catch (error) {
+    console.error('Registration request failed:', error);
+
     return NextResponse.json(
       { message: '無效的請求' },
       { status: 400 }
